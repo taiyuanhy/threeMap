@@ -1,5 +1,5 @@
-# THREE_MAP
-使用THREE.js加载OSM地图,进一步可以实现城市三维可视化、轨迹三维可视化等
+# threeMap
+# 基于ThreeJS 实现的一个地图控件，主要是自己学习。
+# 参照THREE_MAP(https://github.com/lyqandy/THREE_MAP)并作修改
 
- 效果如下
-![image](https://github.com/taiyuanhy/threeMap/raw/master/images/screen.jpg)
+![image](https://github.com/taiyuanhy/threeMap/raw/master/images/screen.png)
