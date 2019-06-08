@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8"/>
+        <title></title>
+        <style>
+            html,body {
+                height: 100%;
+                width: 100%;
+                padding: 0;
+                margin: 0;
+                overflow: hidden;
+            }
+
+            #main {
+                background-color: #ddd;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="main"></div>
+    </body>
+    <script src="three.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script>
+        var div = document.getElementById("main");
+        var width = window.innerWidth
+          , height = window.innerHeight;
+
+        div.style.width = width + "px";
+        div.style.height = height + "px";
+
+        var fov = 60;
+        var ratio = width / height;
+        //切图在scene中的大小
+        var tileSize = 256;
+        var earthRadius = 6378137;
+        var zoom = 18;
+        //像素分辨率
+        var worldWidth = 20037508.3427892;
+        console.log("div", width, height);
+
+        var minScreenX = div.getBoundingClientRect().x;
+        var minScreenY = div.getBoundingClientRect().y;
+        var maxScreenX = div.getBoundingClientRect().width;
+        var maxScreenY = div.getBoundingClientRect().height;
+
+
+        var scene, camera, cameraControls, renderer;
+
+        scene = new THREE.Scene();
+        let tileRoot = new THREE.Group();
+        scene.add(tileRoot);
+        let overlayRoot = new THREE.Group();
+        scene.add(overlayRoot);
+        var centerLonlat = [ 116.5, 39.9];
+        var worldPos = LonLat2WebGL (centerLonlat[0],centerLonlat[1]);
+
+
+        camera = new THREE.PerspectiveCamera(fov,ratio,1,100000000);
+        camera.position.x = worldPos[0];
+        camera.position.y =worldPos[1];
+        camera.position.z = 500;
+        renderer = new THREE.WebGLRenderer({
+            antialias: true//抗锯齿
+        });
+        renderer.setSize(width, height);
+        renderer.setClearColor(0x000000);
+
+        cameraControls = new THREE.OrbitControls(camera,renderer.domElement);
+        cameraControls.target.set(worldPos[0], worldPos[1], worldPos[2]);
+//        cameraControls.maxDistance = 400;
+//        cameraControls.minDistance = 10;
+        cameraControls.enableRotate=false;
+        cameraControls.mouseButtons = {ORBIT: 2, ZOOM: 1, PAN: 0};
+        cameraControls.update();
+        div.appendChild(renderer.domElement);
+        let lastCameraPos=new THREE.Vector3();
+        lastCameraPos.copy(camera.position);
+        let count = 0;
+        var render = function() {
+            cameraControls.update();
+            if(!lastCameraPos.equals(camera.position)) {
+                count++;
+                if (count > 60) {
+                    var ev = new Event('cameraChange', {position: camera.position, oldPosition: lastCameraPos});
+                    lastCameraPos.copy(camera.position);
+                    div.dispatchEvent(ev);
+                    count = 0;
+                }
+            }
+            renderer.render(scene, camera);
+            requestAnimationFrame(render);
+        };
+
+        render();
+        initListener();
+
+        function initListener() {
+            var onmousedown = function(event) {
+                div.style.cursor = "move";
+            };
+
+            var onmouseup = function(event) {
+                if(event.button===0){
+                    div.style.cursor = "default";
+
+                }
+            };
+            var redrawTile = function(event){
+                worldPos = cameraControls.target;
+                centerLonlat = WebMercator2LonLat(worldPos.x,worldPos.y);
+                zoom = getZoom();
+                for (var i =tileRoot.children.length;i>=0;i--){
+                    tileRoot.remove(tileRoot.children[i]);
+                };
+                drawTile();
+            }
+            div.addEventListener("mousedown", onmousedown);
+            div.addEventListener("mouseup", onmouseup);
+            div.addEventListener("cameraChange",redrawTile,false);
+        }
+/*******************************************************************/
+
+
+        //地图切片服务地址
+        var serverURL = "https://mt0.google.cn/vt/lyrs=s&x={x}&y={y}&z={z}";
+        //WGS84转Web墨卡托
+        //参考：http://www.opengsc.com/archives/137
+        function LonLat2WebMercator(lng, lat) {
+            var x = (lng / 180.0) * worldWidth;
+            var y;
+            if (lat > 85.05112) {
+                lat = 85.05112;
+            }
+            if (lat < -85.05112) {
+                lat = -85.05112;
+            }
+            y = (Math.PI / 180.0) * lat;
+            var tmp = Math.PI / 4.0 + y / 2.0;
+            y = worldWidth * Math.log(Math.tan(tmp)) / Math.PI;
+            var result = {
+                x: x,
+                y: y
+            };
+            return result;
+        }
+
+        function  WebMercator2LonLat(x,y){
+            let lon =  x/worldWidth*180;
+            let lat =  y/worldWidth*180;
+            lat= 180/Math.PI*(2*Math.atan(Math.exp(lat*Math.PI/180))-Math.PI/2);
+            return [lon,lat];
+        }
+
+        //Web墨卡托转成tile上的像素坐标，返回像素坐标，以及tile编号，在所在tile上的偏移
+        function LonLat2Num(lon,lat,zoom){
+            var  x =(Math.floor((lon+180)/360*Math.pow(2,zoom)));
+            var y = (Math.floor((1-Math.log(Math.tan(lat*Math.PI/180) + 1/Math.cos(lat*Math.PI/180))/Math.PI)/2 *Math.pow(2,zoom)));
+            return [x,y];
+        }
+
+        //经纬度到tile，再到WebGL坐标
+        function LonLat2WebGL(lng,lat){
+            var webMercator = LonLat2WebMercator(lng,lat);
+            return [webMercator.x,webMercator.y,0];
+        }
+
+        /**
+		 * 加载一个切图
+		 * @param {Object} xno tile编号x
+		 * @param {Object} yno tile编号y
+		 * @param {Object} callback
+		 */
+        function loadImageTile(xno, yno, callback) {
+            var url = serverURL.replace('{x}',xno).replace('{y}',yno).replace('{z}',zoom);
+            var loader = new THREE.TextureLoader();
+            //跨域加载图片
+            loader.crossOrigin = true;
+            loader.load(url, function(texture) {
+                console.log("loaded tile");
+                let resolution =zoomToRes(zoom);
+                let realSize = tileSize*resolution;
+                var geometry = new THREE.PlaneGeometry(realSize,realSize,1);
+                var material = new THREE.MeshBasicMaterial({
+                    map: texture,
+                    transparent: true,
+                    side: THREE.FrontSide
+                });
+                var mesh = new THREE.Mesh(geometry,material);
+                callback(mesh);
+            });
+        }
+        /**
+		 * 将加载的切图放到scene
+		 * @param {Object} mesh
+		 * @param {Object} x坐标  WebGL坐标
+		 * @param {Object} y坐标
+		 */
+        function addTileToScene(mesh, x, y) {
+            //mesh的中心位置
+            //xy是瓦片左上角的坐标,要修正
+            mesh.position.x = x + mesh.geometry.parameters.width/2;
+            mesh.position.y = y - mesh.geometry.parameters.height/2;
+            tileRoot.add(mesh);
+        }
+        /**
+		 * 辅助函数，用于计算tile应该放在何处
+		 * @param {Object} dx  tile间相对位置，也就是编号差
+		 * @param {Object} dy
+		 */
+        function addTileToSceneHelper(x,y,z) {
+            var lonlat =num2deg(x,y,z);
+            var mercatorXY = LonLat2WebMercator(lonlat[0],lonlat[1]);
+            return function(mesh) {
+                addTileToScene(mesh, mercatorXY.x, mercatorXY.y);
+            };
+        }
+
+        //OpenStreetMap行列号转经纬度
+        //这里的经纬度是左上角的经纬度
+        function num2deg(x, y, z) {
+            var lon =  (x/Math.pow(2,z)*360-180);
+            var n=Math.PI-2*Math.PI*y/Math.pow(2,z);
+            var lat =  (180/Math.PI*Math.atan(0.5*(Math.exp(n)-Math.exp(-n))));
+            return [lon, lat]
+        }
+        /**
+		 * 加载地图
+		 * @param {Object} centerX 地图中间的切图编号
+		 * @param {Object} centerY 地图中间的切图编号
+		 */
+        function loadMap() {
+            let topLeft = screenXYToLonlat(minScreenX,minScreenY);
+            let bottomRight = screenXYToLonlat(maxScreenX,maxScreenY);
+            let minNumXY = LonLat2Num(topLeft[0], topLeft[1],zoom);
+            let maxNumXY = LonLat2Num(bottomRight[0], bottomRight[1],zoom);
+            for (var i = minNumXY[0]; i <= maxNumXY[0]; i++) {
+                for (var j = minNumXY[1]; j <= maxNumXY[1]; j++) {
+                    //console.log("try to load",i,j,i-centerX,j-centerY);
+                    console.log("try to load");
+                    loadImageTile(i, j, addTileToSceneHelper(i, j,zoom));
+                }
+            }
+        }
+        /**
+		 * 标记出当前位置
+		 * @param {Object} x webGL坐标
+		 * @param {Object} y
+		 */
+        function markCurrentPosition(x, y) {
+            var geometry = new THREE.SphereGeometry(10,30,30);
+            var material = new THREE.MeshBasicMaterial({
+                color: 0xff0000
+            });
+            var mesh = new THREE.Mesh(geometry,material);
+            var axes = new THREE.AxisHelper(50);
+            mesh.add(axes);
+            mesh.position.x = x;
+            mesh.position.y = y;
+            mesh.position.z = 0;
+            overlayRoot.add(mesh);
+        }
+
+        /**
+         * 屏幕坐标转经纬度
+         * @param x
+         * @param y
+         */
+        function screenXYToLonlat(x,y){
+            let mercatorXY = screenXYToMercator(x,y);
+            let lonlat = WebMercator2LonLat(mercatorXY[0],mercatorXY[1]);
+            return lonlat;
+        }
+        function screenXYToMercator(x,y){
+            var vec = new THREE.Vector3(); // create once and reuse
+            var pos = new THREE.Vector3(); // create once and reuse
+            vec.set(
+                ( x / maxScreenX ) * 2 - 1,
+                - ( y / maxScreenY ) * 2 + 1,
+                0 );
+            vec.unproject( camera );
+            vec.sub( camera.position ).normalize();
+            var distance = - camera.position.z / vec.z;
+            pos.copy( camera.position ).add( vec.multiplyScalar( distance ) );
+            return [pos.x,pos.y];
+        }
+        function xyToLonlat(x,y){
+            let lonlat;
+            let vec = new THREE.Vector3();
+            vec.x = ( x / maxScreenX ) * 2 - 1;
+            vec.y = - ( y / maxScreenY ) * 2 + 1;
+            var raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(vec, camera);
+            var intersects = raycaster.intersectObjects(scene.children);
+            // if there is one (or more) intersections
+            if ( intersects.length > 0 )
+            {
+                let pos =intersects[0].point;
+                lonlat = WebMercator2LonLat(pos.x,pos.y);
+            }
+            return lonlat;
+        }
+        function getZoom(){
+            let leftTop = screenXYToMercator(minScreenX,minScreenY);
+            let rightBottom = screenXYToMercator(maxScreenX,maxScreenY);
+            let realWidth =rightBottom[0]-leftTop[0];
+            let res = realWidth/maxScreenX;
+            return resToZoom(res);
+        }
+        function resToZoom(res){
+            let temp = 2*Math.PI*earthRadius/(tileSize*res);
+            let zoom = Math.log(temp)/Math.log(2);
+            zoom = Math.floor(zoom);
+            return zoom;
+        }
+        function zoomToRes(zoom){
+            var resolution = 2*Math.PI*earthRadius/(Math.pow(2,zoom)*tileSize);
+            return resolution;
+        }
+        function drawTile() {
+            let lng = centerLonlat[0];
+            let lat = centerLonlat[1];
+            var tilePos = LonLat2Num(lng, lat,zoom);
+                //以centerLng所在点tile中心点为中心，加载tile
+            loadMap(tilePos[0], tilePos[1]);
+            //标记当前位置
+//            var currentWebGLPos = LonLat2WebGL(lng,lat);
+//            markCurrentPosition(currentWebGLPos[0],currentWebGLPos[1]);
+        }
+        drawTile();
+    </script>
+</html>
