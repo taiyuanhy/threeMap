@@ -20,8 +20,8 @@
     <body>
         <div id="main"></div>
     </body>
-    <script src="three.js"></script>
-    <script src="OrbitControls.js"></script>
+    <script src="lib/three.js"></script>
+    <script src="lib/OrbitControls.js"></script>
     <script type="module">
         import Const from '/threeMap/src/Const.js';
         import Util from '/threeMap/src/Util.js';
@@ -65,11 +65,14 @@
         renderer.setClearColor(0x000000);
 
         cameraControls = new THREE.OrbitControls(camera,renderer.domElement);
+        cameraControls.enableDamping = true;
         cameraControls.target.set(worldPos[0], worldPos[1], worldPos[2]);
 //        cameraControls.maxDistance = 400;
 //        cameraControls.minDistance = 10;
+        cameraControls.enablePan=true;
+        cameraControls.ennableZoom=false;
         cameraControls.enableRotate=false;
-        cameraControls.mouseButtons = {ORBIT: 2, ZOOM: 1, PAN: 0};
+        cameraControls.mouseButtons = { ORBIT: THREE.MOUSE.RIGHT, ZOOM: THREE.MOUSE.MIDDLE, PAN: THREE.MOUSE.LEFT };
         cameraControls.update();
         div.appendChild(renderer.domElement);
         let lastCameraPos=new THREE.Vector3();
@@ -95,7 +98,9 @@
 
         function initListener() {
             var onmousedown = function(event) {
-                div.style.cursor = "move";
+                if(event.button===0) {
+                    div.style.cursor = "move";
+                }
             };
 
             var onmouseup = function(event) {
