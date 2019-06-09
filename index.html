@@ -21,7 +21,7 @@
         <div id="main"></div>
     </body>
     <script src="lib/three.js"></script>
-    <script src="lib/OrbitControls.js"></script>
+    <script src="lib/controls.js"></script>
     <script type="module">
         import Const from '/threeMap/src/Const.js';
         import Util from '/threeMap/src/Util.js';
@@ -65,29 +65,38 @@
         renderer.setClearColor(0x000000);
 
         cameraControls = new THREE.OrbitControls(camera,renderer.domElement);
+        cameraControls.panSpeed = 0.5;
         cameraControls.enableDamping = true;
         cameraControls.target.set(worldPos[0], worldPos[1], worldPos[2]);
 //        cameraControls.maxDistance = 400;
 //        cameraControls.minDistance = 10;
         cameraControls.enablePan=true;
-        cameraControls.ennableZoom=false;
         cameraControls.enableRotate=false;
-        cameraControls.mouseButtons = { ORBIT: THREE.MOUSE.RIGHT, ZOOM: THREE.MOUSE.MIDDLE, PAN: THREE.MOUSE.LEFT };
+        cameraControls.mouseButtons = { LEFT: THREE.MOUSE.RIGHT, ZOOM: THREE.MOUSE.MIDDLE, RIGHT: THREE.MOUSE.LEFT };
         cameraControls.update();
         div.appendChild(renderer.domElement);
         let lastCameraPos=new THREE.Vector3();
         lastCameraPos.copy(camera.position);
-        let count = 0;
+        let cameraStatus = 'static';
+        let cameraChanged = false;
+        let changeTime = new Date().getTime();
+        let staticTime = new Date().getTime();
         var render = function() {
             cameraControls.update();
-            if(!lastCameraPos.equals(camera.position)) {
-                count++;
-                if (count > 60) {
-                    var ev = new Event('cameraChange', {position: camera.position, oldPosition: lastCameraPos});
-                    lastCameraPos.copy(camera.position);
-                    div.dispatchEvent(ev);
-                    count = 0;
-                }
+            if(!lastCameraPos.equals(camera.position)){
+                cameraStatus = 'change';
+                cameraChanged = true;
+                changeTime = new Date().getTime();
+            }
+            else{
+                cameraStatus = 'static';
+                staticTime = new Date().getTime();
+            }
+            lastCameraPos.copy(camera.position);
+            if (cameraChanged&&cameraStatus==='static'&&staticTime-changeTime > 500) {
+                cameraChanged = false;
+                var ev = new Event('cameraChangeEnd', {position: camera.position, oldPosition: lastCameraPos});
+                div.dispatchEvent(ev);
             }
             renderer.render(scene, camera);
             requestAnimationFrame(render);
@@ -96,6 +105,27 @@
         render();
         initListener();
 
+        let frameTiles = [];
+        let tileMeshBuffer = {}
+        let textureBuffer = {};
+        function isContinue(){
+            if(frameTiles.length===1){
+                return {openTiles:frameTiles[0],closeTiles:[]};
+            }
+            let frame1 = frameTiles[0];
+            let frame2 = frameTiles[1];
+            let openTiles = arrayMinus(frame2,frame1);
+            let closeTiles = arrayMinus(frame1,frame2);
+            return {
+                openTiles:openTiles,closeTiles:closeTiles
+            }
+        }
+        function arrayMinus(arr1,arr2){
+            var m = {};
+            arr1.forEach(function(al){m[al]=al;})
+            arr2.forEach(function(bl){delete m[bl];})
+            return Object.keys(m);
+        }
         function initListener() {
             var onmousedown = function(event) {
                 if(event.button===0) {
@@ -113,14 +143,11 @@
                 worldPos = cameraControls.target;
                 centerLonlat = Util.WebMercator2LonLat(worldPos.x,worldPos.y);
                 zoom = Util.getZoom(minScreenX,minScreenY,maxScreenX,maxScreenY);
-                for (var i =tileRoot.children.length;i>=0;i--){
-                    tileRoot.remove(tileRoot.children[i]);
-                };
                 drawTile();
             }
             div.addEventListener("mousedown", onmousedown);
             div.addEventListener("mouseup", onmouseup);
-            div.addEventListener("cameraChange",redrawTile,false);
+            div.addEventListener("cameraChangeEnd",redrawTile,false);
         }
 /*******************************************************************/
 
@@ -128,7 +155,18 @@
         //地图切片服务地址
         var serverURL = "https://mt0.google.cn/vt/lyrs=s&x={x}&y={y}&z={z}";
 
-
+        function tileNameCreater(x,y,z){
+            return x+'_'+y+'_'+z;
+        }
+        function getTileName(name){
+           let result =  name.split('_');
+           return result;
+        }
+        //移除瓦片
+        function removeImageTile(tileName){
+            tileRoot.remove(tileMeshBuffer[tileName]);
+            delete tileMeshBuffer[tileName];
+        }
         /**
 		 * 加载一个切图
 		 * @param {Object} xno tile编号x
@@ -150,7 +188,10 @@
                     transparent: true,
                     side: THREE.FrontSide
                 });
-                var mesh = new THREE.Mesh(geometry,material);
+                var mesh = new THREE.Mesh(geometry,material)
+                var tileName = tileNameCreater(xno,yno,zoom);
+                tileMeshBuffer[tileName] = mesh;
+                textureBuffer[tileName] = texture;
                 callback(mesh);
             });
         }
@@ -191,12 +232,29 @@
             let bottomRight = Util.screenXYToLonlat(maxScreenX,maxScreenY,maxScreenX,maxScreenY);
             let minNumXY = Util.LonLat2Num(topLeft[0], topLeft[1],zoom);
             let maxNumXY = Util.LonLat2Num(bottomRight[0], bottomRight[1],zoom);
+            let currentTiles = [];
             for (var i = minNumXY[0]; i <= maxNumXY[0]; i++) {
                 for (var j = minNumXY[1]; j <= maxNumXY[1]; j++) {
-                    //console.log("try to load",i,j,i-centerX,j-centerY);
-                    console.log("try to load");
-                    loadImageTile(i, j, addTileToSceneHelper(i, j,zoom));
+                    currentTiles.push(tileNameCreater(i,j,zoom));
                 }
+            }
+            frameTiles.push(currentTiles);
+            if(frameTiles.length>2){
+                frameTiles.shift();
+            }
+            let result = isContinue();
+            for (var i = 0; i <result.openTiles.length; i++) {
+                if(tileMeshBuffer[result.openTiles[i]]){
+                    tileMeshBuffer[result.openTiles[i]].visible = true;
+                }
+                else {
+                    let tileNameArr = getTileName(result.openTiles[i]);
+                    loadImageTile(tileNameArr[0], tileNameArr[1], addTileToSceneHelper(tileNameArr[0], tileNameArr[1], tileNameArr[2]));
+                }
+            }
+            for (var j = 0; j <result.closeTiles.length; j++) {
+                let tileMesh = tileMeshBuffer[result.closeTiles[j]];
+                tileMesh.visible = false;
             }
         }
         /**
@@ -226,7 +284,7 @@
                 //以centerLng所在点tile中心点为中心，加载tile
             loadMap(tilePos[0], tilePos[1]);
             //标记当前位置
-//            var currentWebGLPos = LonLat2WebGL(lng,lat);
+//            var currentWebGLPos = Util.LonLat2WebGL(lng,lat);
 //            markCurrentPosition(currentWebGLPos[0],currentWebGLPos[1]);
         }
         drawTile();
