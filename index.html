@@ -75,29 +75,39 @@
         cameraControls.mouseButtons = { LEFT: THREE.MOUSE.RIGHT, ZOOM: THREE.MOUSE.MIDDLE, RIGHT: THREE.MOUSE.LEFT };
         cameraControls.update();
         div.appendChild(renderer.domElement);
-        let lastCameraPos=new THREE.Vector3();
-        lastCameraPos.copy(camera.position);
-        let cameraStatus = 'static';
-        let cameraChanged = false;
-        let changeTime = new Date().getTime();
-        let staticTime = new Date().getTime();
+
+
+        let frameTiles = [];
+        let tileMeshBuffer = {}
+        let textureBuffer = {};
+        let tileStatusBuffer = {};
+        //地图切片服务地址
+        var serverURL = "https://mt0.google.cn/vt/lyrs=s&x={x}&y={y}&z={z}";
+//        let lastCameraPos=new THREE.Vector3();
+//        lastCameraPos.copy(camera.position);
+//        let cameraStatus = 'static';
+//        let cameraChanged = false;
+//        let changeTime = new Date().getTime();
+//        let staticTime = new Date().getTime();
         var render = function() {
             cameraControls.update();
-            if(!lastCameraPos.equals(camera.position)){
-                cameraStatus = 'change';
-                cameraChanged = true;
-                changeTime = new Date().getTime();
-            }
-            else{
-                cameraStatus = 'static';
-                staticTime = new Date().getTime();
-            }
-            lastCameraPos.copy(camera.position);
-            if (cameraChanged&&cameraStatus==='static'&&staticTime-changeTime > 500) {
-                cameraChanged = false;
-                var ev = new Event('cameraChangeEnd', {position: camera.position, oldPosition: lastCameraPos});
-                div.dispatchEvent(ev);
-            }
+//            if(!lastCameraPos.equals(camera.position)){
+//                cameraStatus = 'change';
+//                cameraChanged = true;
+//                changeTime = new Date().getTime();
+//            }
+//            else{
+//                cameraStatus = 'static';
+//                staticTime = new Date().getTime();
+//            }
+//            lastCameraPos.copy(camera.position);
+//            if (cameraChanged&&cameraStatus==='static'&&staticTime-changeTime > 500) {
+//                cameraChanged = false;
+//                var ev = new Event('cameraChangeEnd', {position: camera.position, oldPosition: lastCameraPos});
+//                div.dispatchEvent(ev);
+//            }
+            updateParam();
+            drawTile();
             renderer.render(scene, camera);
             requestAnimationFrame(render);
         };
@@ -105,19 +115,28 @@
         render();
         initListener();
 
-        let frameTiles = [];
-        let tileMeshBuffer = {}
-        let textureBuffer = {};
+        function updateParam(){
+            worldPos = cameraControls.target;
+            centerLonlat = Util.WebMercator2LonLat(worldPos.x,worldPos.y);
+            zoom = Util.getZoom(minScreenX,minScreenY,maxScreenX,maxScreenY);
+        }
+
         function isContinue(){
             if(frameTiles.length===1){
                 return {openTiles:frameTiles[0],closeTiles:[]};
             }
             let frame1 = frameTiles[0];
             let frame2 = frameTiles[1];
-            let openTiles = arrayMinus(frame2,frame1);
-            let closeTiles = arrayMinus(frame1,frame2);
-            return {
-                openTiles:openTiles,closeTiles:closeTiles
+            if(frame1.toString()===frame2.toString()){
+                return {
+                    openTiles:[],closeTiles:[]
+                }
+            }else {
+                let openTiles = arrayMinus(frame2, frame1);
+                let closeTiles = arrayMinus(frame1, frame2);
+                return {
+                    openTiles: openTiles, closeTiles: closeTiles
+                }
             }
         }
         function arrayMinus(arr1,arr2){
@@ -139,21 +158,14 @@
 
                 }
             };
-            var redrawTile = function(event){
-                worldPos = cameraControls.target;
-                centerLonlat = Util.WebMercator2LonLat(worldPos.x,worldPos.y);
-                zoom = Util.getZoom(minScreenX,minScreenY,maxScreenX,maxScreenY);
-                drawTile();
-            }
+
             div.addEventListener("mousedown", onmousedown);
             div.addEventListener("mouseup", onmouseup);
-            div.addEventListener("cameraChangeEnd",redrawTile,false);
+//            div.addEventListener("cameraChangeEnd",redrawTile,false);
         }
 /*******************************************************************/
 
 
-        //地图切片服务地址
-        var serverURL = "https://mt0.google.cn/vt/lyrs=s&x={x}&y={y}&z={z}";
 
         function tileNameCreater(x,y,z){
             return x+'_'+y+'_'+z;
@@ -176,23 +188,28 @@
         function loadImageTile(xno, yno, callback) {
             var url = serverURL.replace('{x}',xno).replace('{y}',yno).replace('{z}',zoom);
             var loader = new THREE.TextureLoader();
+            var tileName = tileNameCreater(xno, yno, zoom);
             //跨域加载图片
             loader.crossOrigin = true;
             loader.load(url, function(texture) {
-                console.log("loaded tile");
-                let resolution =Util.zoomToRes(zoom);
-                let realSize = Const.tileSize*resolution;
-                var geometry = new THREE.PlaneGeometry(realSize,realSize,1);
-                var material = new THREE.MeshBasicMaterial({
-                    map: texture,
-                    transparent: true,
-                    side: THREE.FrontSide
-                });
-                var mesh = new THREE.Mesh(geometry,material)
-                var tileName = tileNameCreater(xno,yno,zoom);
-                tileMeshBuffer[tileName] = mesh;
-                textureBuffer[tileName] = texture;
-                callback(mesh);
+                //有些瓦片资源请求到之前就被隐藏了，因此这些瓦片不需要创建
+                if(tileStatusBuffer[tileName] === 'loading')
+                {
+                    let resolution = Util.zoomToRes(zoom);
+                    let realSize = Const.tileSize * resolution;
+                    var geometry = new THREE.PlaneGeometry(realSize, realSize, 1);
+                    var material = new THREE.MeshBasicMaterial({
+                        map: texture,
+                        transparent: true,
+                        side: THREE.FrontSide
+                    });
+                    var mesh = new THREE.Mesh(geometry, material);
+                    console.log("loaded tile_" + tileName);
+                    tileMeshBuffer[tileName] = mesh;
+                    textureBuffer[tileName] = texture;
+                    callback(mesh);
+                    tileStatusBuffer[tileName] = 'loaded';
+                }
             });
         }
         /**
@@ -244,6 +261,7 @@
             }
             let result = isContinue();
             for (var i = 0; i <result.openTiles.length; i++) {
+                tileStatusBuffer[result.openTiles[i]] = 'loading';
                 if(tileMeshBuffer[result.openTiles[i]]){
                     tileMeshBuffer[result.openTiles[i]].visible = true;
                 }
@@ -253,8 +271,12 @@
                 }
             }
             for (var j = 0; j <result.closeTiles.length; j++) {
+                tileStatusBuffer[result.closeTiles[j]] = 'closed';
                 let tileMesh = tileMeshBuffer[result.closeTiles[j]];
-                tileMesh.visible = false;
+                if(tileMesh) {
+                    //有可能还没来的及创建出地块就要被隐藏掉,因此要判断
+                    tileMesh.visible = false;
+                }
             }
         }
         /**
@@ -287,6 +309,5 @@
 //            var currentWebGLPos = Util.LonLat2WebGL(lng,lat);
 //            markCurrentPosition(currentWebGLPos[0],currentWebGLPos[1]);
         }
-        drawTile();
     </script>
 </html>
