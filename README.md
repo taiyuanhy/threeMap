@@ -5,4 +5,4 @@
 
 ![image](https://github.com/taiyuanhy/threeMap/raw/master/images/screen.png)
 
-- demo
+- demo(https://www.thingjs.com/uearth/threeMap/index.html)
