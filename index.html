@@ -23,8 +23,8 @@
     <script src="lib/three.js"></script>
     <script src="lib/OrbitControls.js"></script>
     <script type="module">
-        import Const from '/threeMap/src/Const.js';
-        import Util from '/threeMap/src/Util.js';
+        import Const from '/src/Const.js';
+        import Util from '/src/Util.js';
         var div = document.getElementById("main");
         var width = window.innerWidth
           , height = window.innerHeight;
@@ -44,6 +44,7 @@
         var scene, camera, cameraControls, renderer;
 
         scene = new THREE.Scene();
+        scene.background = new THREE.Color( 'rgb(221,221,221)' );
         let tileRoot = new THREE.Group();
         scene.add(tileRoot);
         let overlayRoot = new THREE.Group();
@@ -54,7 +55,7 @@
         camera = new THREE.PerspectiveCamera(fov,ratio,1,100000000);
         camera.position.x = worldPos[0];
         camera.position.y =worldPos[1];
-        camera.position.z = 500;
+        camera.position.z = 50000000;
 
 
         Util.camera = camera;
@@ -185,32 +186,32 @@
 		 * @param {Object} yno tile编号y
 		 * @param {Object} callback
 		 */
-        function loadImageTile(xno, yno, callback) {
+        function loadImageTile(xno, yno,) {
             var url = serverURL.replace('{x}',xno).replace('{y}',yno).replace('{z}',zoom);
             var loader = new THREE.TextureLoader();
             var tileName = tileNameCreater(xno, yno, zoom);
-            //跨域加载图片
-            loader.crossOrigin = true;
-            loader.load(url, function(texture) {
-                //有些瓦片资源请求到之前就被隐藏了，因此这些瓦片不需要创建
-                if(tileStatusBuffer[tileName] === 'loading')
-                {
-                    let resolution = Util.zoomToRes(zoom);
-                    let realSize = Const.tileSize * resolution;
-                    var geometry = new THREE.PlaneGeometry(realSize, realSize, 1);
-                    var material = new THREE.MeshBasicMaterial({
-                        map: texture,
-                        transparent: true,
-                        side: THREE.FrontSide
-                    });
-                    var mesh = new THREE.Mesh(geometry, material);
-                    console.log("loaded tile_" + tileName);
-                    tileMeshBuffer[tileName] = mesh;
-                    textureBuffer[tileName] = texture;
-                    callback(mesh);
-                    tileStatusBuffer[tileName] = 'loaded';
-                }
-            });
+            
+            if(!tileStatusBuffer[tileName])
+            {
+                tileStatusBuffer[tileName] = 'loading';
+                //跨域加载图片
+                loader.crossOrigin = true;
+                loader.load(url, function(texture) {
+                        let resolution = Util.zoomToRes(zoom);
+                        let realSize = Const.tileSize * resolution;
+                        var geometry = new THREE.PlaneGeometry(realSize, realSize, 1);
+                        var material = new THREE.MeshBasicMaterial({
+                            map: texture,
+                            transparent: true,
+                            side: THREE.FrontSide
+                        });
+                        var mesh = new THREE.Mesh(geometry, material);
+                        console.log("loaded tile_" + tileName);
+                        tileMeshBuffer[tileName] = mesh;
+                        textureBuffer[tileName] = texture;
+                        tileStatusBuffer[tileName] = 'loaded';
+                });
+            }
         }
         /**
 		 * 将加载的切图放到scene
@@ -224,18 +225,18 @@
             mesh.position.x = x + mesh.geometry.parameters.width/2;
             mesh.position.y = y - mesh.geometry.parameters.height/2;
             tileRoot.add(mesh);
+            return mesh;
         }
         /**
 		 * 辅助函数，用于计算tile应该放在何处
 		 * @param {Object} dx  tile间相对位置，也就是编号差
 		 * @param {Object} dy
 		 */
-        function addTileToSceneHelper(x,y,z) {
+        function addTileToSceneHelper(x,y,z,mesh) {
             var lonlat =Util.num2deg(x,y,z);
             var mercatorXY = Util.LonLat2WebMercator(lonlat[0],lonlat[1]);
-            return function(mesh) {
-                addTileToScene(mesh, mercatorXY[0], mercatorXY[1]);
-            };
+           var mesh= addTileToScene(mesh, mercatorXY[0], mercatorXY[1]);
+           mesh.name = tileNameCreater(x,y,z);
         }
 
 
@@ -247,37 +248,57 @@
         function loadMap() {
             let topLeft = Util.screenXYToLonlat(minScreenX,minScreenY,maxScreenX,maxScreenY);
             let bottomRight = Util.screenXYToLonlat(maxScreenX,maxScreenY,maxScreenX,maxScreenY);
+
             let minNumXY = Util.LonLat2Num(topLeft[0], topLeft[1],zoom);
             let maxNumXY = Util.LonLat2Num(bottomRight[0], bottomRight[1],zoom);
+            let maxX = Math.pow(2,zoom)-1;
+            minNumXY[0] = minNumXY[0]<0?0:minNumXY[0];
+            maxNumXY[0] = maxNumXY[0]>maxX?maxX:maxNumXY[0];
+            minNumXY[1] =  minNumXY[1]<0?0:minNumXY[1];
+            maxNumXY[1] = maxNumXY[1]>maxX?maxX:maxNumXY[1];
             let currentTiles = [];
             for (var i = minNumXY[0]; i <= maxNumXY[0]; i++) {
                 for (var j = minNumXY[1]; j <= maxNumXY[1]; j++) {
-                    currentTiles.push(tileNameCreater(i,j,zoom));
+                    var tileName = tileNameCreater(i,j,zoom);
+                    currentTiles.push(tileName);
+                    loadImageTile(i,j);
                 }
             }
-            frameTiles.push(currentTiles);
-            if(frameTiles.length>2){
-                frameTiles.shift();
-            }
-            let result = isContinue();
-            for (var i = 0; i <result.openTiles.length; i++) {
-                tileStatusBuffer[result.openTiles[i]] = 'loading';
-                if(tileMeshBuffer[result.openTiles[i]]){
-                    tileMeshBuffer[result.openTiles[i]].visible = true;
-                }
-                else {
-                    let tileNameArr = getTileName(result.openTiles[i]);
-                    loadImageTile(tileNameArr[0], tileNameArr[1], addTileToSceneHelper(tileNameArr[0], tileNameArr[1], tileNameArr[2]));
+            tileRoot.children.length = 0;
+            for(var i = 0;i< currentTiles.length;i++){
+                var tileName = currentTiles[i];
+                if(tileStatusBuffer[tileName]=== 'loaded'){
+                    var x = tileName.split('_')[0];
+                    var y = tileName.split('_')[1];
+                    var z = tileName.split('_')[2];
+                    addTileToSceneHelper(x,y,z,tileMeshBuffer[tileName]);
                 }
             }
-            for (var j = 0; j <result.closeTiles.length; j++) {
-                tileStatusBuffer[result.closeTiles[j]] = 'closed';
-                let tileMesh = tileMeshBuffer[result.closeTiles[j]];
-                if(tileMesh) {
-                    //有可能还没来的及创建出地块就要被隐藏掉,因此要判断
-                    tileMesh.visible = false;
-                }
-            }
+            // frameTiles.push(currentTiles);
+            // if(frameTiles.length>2){
+            //     frameTiles.shift();
+            // }
+            // let result = isContinue();
+            // for (var i = 0; i <result.openTiles.length; i++) {
+            //     tileStatusBuffer[result.openTiles[i]] = 'loading';
+            //     if(tileMeshBuffer[result.openTiles[i]]){
+            //         tileMeshBuffer[result.openTiles[i]].visible = true;
+            //     }
+            //     else {
+            //         let tileNameArr = getTileName(result.openTiles[i]);
+            //         loadImageTile(tileNameArr[0], tileNameArr[1], addTileToSceneHelper(tileNameArr[0], tileNameArr[1], tileNameArr[2]));
+            //     }
+            // }
+            // for (var j = 0; j < result.closeTiles.length; j++) {
+            //     tileStatusBuffer[result.closeTiles[j]] = 'closed';
+            //     let tileMesh = tileMeshBuffer[result.closeTiles[j]];
+            //     if (tileMesh) {
+            //         //有可能还没来的及创建出地块就要被隐藏掉,因此要判断
+            //         tileMesh.material.polygonOffset = true;
+            //         tileMesh.material.polygonOffsetUnits = -1;
+            //         tileMesh.material.polygonOffsetFactor = -1000
+            //     }
+            // }
         }
         /**
 		 * 标记出当前位置
@@ -309,5 +330,26 @@
 //            var currentWebGLPos = Util.LonLat2WebGL(lng,lat);
 //            markCurrentPosition(currentWebGLPos[0],currentWebGLPos[1]);
         }
+        
+        div.addEventListener('dblclick',function (e){
+            pickupObjects(e);
+        });
+
+        let raycaster = new THREE.Raycaster();
+        let mouse = new THREE.Vector2();
+        function pickupObjects (e){
+            //将鼠标点击位置的屏幕坐标转成threejs中的标准坐标
+            mouse.x = (e.clientX/window.innerWidth)*2 -1;
+            mouse.y = -(e.clientY/window.innerHeight)*2 + 1;
+            //从相机发射一条射线，经过鼠标点击位置
+            raycaster.setFromCamera(mouse,camera);
+            //计算射线相机到的对象，可能有多个对象，因此返回的是一个数组，按离相机远近排列
+            let intersects = raycaster.intersectObjects(tileRoot.children);
+            for ( var i = 0; i < intersects.length; i++ ) {
+                intersects[ i ].object.material.color.set( 0x00ff00 );
+                console.log(intersects[i].object.name);
+            }
+        }
+
     </script>
 </html>
