@@ -4,3 +4,5 @@
 - 参照[THREE_MAP](https://github.com/lyqandy/THREE_MAP)并作修改
 
 ![image](https://github.com/taiyuanhy/threeMap/raw/master/images/screen.png)
+
+- demo
